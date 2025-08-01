@@ -1,7 +1,9 @@
 import logging
 import os
 import asyncio
+import threading
 from datetime import datetime
+from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.dispatcher.filters import Command
 from aiogram.types import (
@@ -9,8 +11,7 @@ from aiogram.types import (
     KeyboardButton, 
     InputFile, 
     InlineKeyboardMarkup, 
-    InlineKeyboardButton,
-    InputMediaPhoto
+    InlineKeyboardButton
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -31,9 +32,9 @@ dp = Dispatcher(bot)
 # База данных
 class Database:
     def __init__(self):
-        self.user_channels = {}  # {user_id: {channel_id: channel_name}}
-        self.scheduled_mailings = []  # Все активные рассылки
-        self.current_state = {}  # Текущее состояние пользователей
+        self.user_channels = {}
+        self.scheduled_mailings = []
+        self.current_state = {}
 
 db = Database()
 
@@ -71,6 +72,15 @@ def get_channels_kb(user_id, prefix="select"):
                 )
             ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+# Фиктивный веб-сервер для Render
+async def health_check(request):
+    return web.Response(text="Bot is running")
+
+def run_web_server():
+    app = web.Application()
+    app.router.add_get('/', health_check)
+    web.run_app(app, port=int(os.getenv("PORT", 8080)))
 
 # Обработчики команд
 @dp.message_handler(Command("start"))
@@ -283,12 +293,11 @@ async def confirm_mailing(message: types.Message):
     )
 
     if media_path:
-        with open(media_path, 'rb') as media_file:
-            await message.answer_photo(
-                photo=InputFile(media_path),
-                caption=confirm_text,
-                reply_markup=get_confirm_kb()
-            )
+        await message.answer_photo(
+            photo=InputFile(media_path),
+            caption=confirm_text,
+            reply_markup=get_confirm_kb()
+        )
     else:
         await message.answer(
             confirm_text,
@@ -359,12 +368,11 @@ async def finalize_mailing(message: types.Message):
 async def send_mailing(channel_id: int, text: str, media_path: str):
     try:
         if media_path:
-            with open(media_path, 'rb') as media_file:
-                await bot.send_photo(
-                    chat_id=channel_id,
-                    photo=InputFile(media_path),
-                    caption=text
-                )
+            await bot.send_photo(
+                chat_id=channel_id,
+                photo=InputFile(media_path),
+                caption=text
+            )
         else:
             await bot.send_message(
                 chat_id=channel_id,
@@ -473,5 +481,9 @@ async def on_startup(_):
     logger.info("Бот запущен и готов к работе")
 
 if __name__ == '__main__':
+    # Запуск фиктивного веб-сервера для Render
+    threading.Thread(target=run_web_server, daemon=True).start()
+    
+    # Запуск бота
     from aiogram import executor
     executor.start_polling(dp, on_startup=on_startup, skip_updates=True)
