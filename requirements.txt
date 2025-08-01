@@ -1,4 +1,4 @@
-aiogram==3.0.0b7
+aiogram==2.25.1  # Более стабильная версия
 apscheduler==3.10.1
 python-dotenv==1.0.0
 aiohttp==3.8.6
