@@ -5,9 +5,9 @@ import time
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types
 from aiogram.dispatcher.filters import Command
-from aiogram.types import (ReplyKeyboardMarkup, KeyboardButton, 
-                          BufferedInputFile, InlineKeyboardMarkup, 
-                          InlineKeyboardButton)
+from aiogram.types import (ReplyKeyboardMarkup, KeyboardButton,
+                          InlineKeyboardMarkup, InlineKeyboardButton,
+                          InputFile)
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # Настройки
