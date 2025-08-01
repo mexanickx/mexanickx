@@ -1,6 +1,7 @@
 import logging
 import os
 import asyncio
+import time  # Добавлен импорт модуля time
 from datetime import datetime
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types
@@ -232,7 +233,7 @@ async def process_mailing(message: types.Message):
         user_state["text"] = message.text.strip()
         user_state["step"] = "awaiting_media"
         await message.answer(
-            "🖼️ Отправьте изображение для рассылки (или 'пропустить' для текстовой рассылки):",
+            "🖼️ Отправьте изображение для рассылки (или нажмите 'пропустить' для текстовой рассылки):",
             reply_markup=ReplyKeyboardMarkup(
                 keyboard=[[KeyboardButton(text="пропустить")]],
                 resize_keyboard=True
@@ -243,7 +244,9 @@ async def process_mailing(message: types.Message):
         if message.text and message.text.lower() == "пропустить":
             user_state["media_path"] = None
             await confirm_mailing(message)
+            await message.answer("✅ Рассылка будет без изображения", reply_markup=get_confirm_kb())
         elif message.photo:
+            # Удаляем предыдущее изображение, если оно было
             if "media_path" in user_state and user_state["media_path"]:
                 try:
                     os.remove(user_state["media_path"])
@@ -259,9 +262,20 @@ async def process_mailing(message: types.Message):
                 os.makedirs("media")
 
             local_path = f"media/{user_id}_{file_id}.jpg"
-            await bot.download_file(file_path, local_path)
-            user_state["media_path"] = local_path
-            await confirm_mailing(message)
+            try:
+                await bot.download_file(file_path, local_path)
+                user_state["media_path"] = local_path
+                await message.answer("✅ Изображение успешно загружено!", reply_markup=get_confirm_kb())
+                await confirm_mailing(message)
+            except Exception as e:
+                logger.error(f"Ошибка загрузки изображения: {e}")
+                await message.answer(
+                    "❌ Не удалось загрузить изображение. Попробуйте еще раз или нажмите 'пропустить'.",
+                    reply_markup=ReplyKeyboardMarkup(
+                        keyboard=[[KeyboardButton(text="пропустить")]],
+                        resize_keyboard=True
+                    )
+                )
         else:
             await message.answer(
                 "Пожалуйста, отправьте изображение или нажмите 'пропустить'.",
@@ -288,6 +302,107 @@ async def confirm_mailing(message: types.Message):
             "❌ Ошибка: недостаточно данных для создания рассылки",
             reply_markup=get_main_kb()
         )
+        db.current_state.pop(user_id, None)
+        return
+
+    # Сохраняем данные для подтверждения
+    db.current_state[user_id] = {
+        "action": "confirming_mailing",
+        "mailing_data": {
+            "channel_id": channel_id,
+            "time": time_str,
+            "text": text,
+            "media_path": media_path
+        }
+    }
+
+    channel_name = db.user_channels[user_id][channel_id]
+    confirm_text = (
+        f"📋 Подтвердите рассылку для канала {channel_name}:\n\n"
+        f"⏰ Время: {time_str}\n"
+        f"📝 Текст: {text}\n\n"
+        "Нажмите «✅ Подтвердить» для создания рассылки"
+    )
+
+    if media_path and os.path.exists(media_path):
+        try:
+            with open(media_path, 'rb') as photo_file:
+                await message.answer_photo(
+                    photo=photo_file,
+                    caption=confirm_text,
+                    reply_markup=get_confirm_kb()
+                )
+        except Exception as e:
+            logger.error(f"Ошибка отправки изображения: {e}")
+            await message.answer(
+                confirm_text,
+                reply_markup=get_confirm_kb()
+            )
+    else:
+        await message.answer(
+            confirm_text,
+            reply_markup=get_confirm_kb()
+        )
+
+@dp.message_handler(lambda message: message.text == "✅ Подтвердить")
+async def finalize_mailing(message: types.Message):
+    user_id = message.from_user.id
+    user_state = db.current_state.get(user_id, {})
+
+    if user_state.get("action") != "confirming_mailing":
+        return
+
+    mailing_data = user_state.get("mailing_data", {})
+    channel_id = mailing_data.get("channel_id")
+    time_str = mailing_data.get("time")
+    text = mailing_data.get("text")
+    media_path = mailing_data.get("media_path")
+
+    if None in [channel_id, time_str, text]:
+        await message.answer(
+            "❌ Ошибка: недостаточно данных для создания рассылки",
+            reply_markup=get_main_kb()
+        )
+        db.current_state.pop(user_id, None)
+        return
+
+    try:
+        hour, minute = map(int, time_str.split(":"))
+        channel_name = db.user_channels[user_id][channel_id]
+
+        job_id = f"mailing_{user_id}_{channel_id}_{int(time.time())}"
+
+        scheduler.add_job(
+            send_mailing,
+            'cron',
+            hour=hour,
+            minute=minute,
+            args=[channel_id, text, media_path],
+            id=job_id
+        )
+
+        db.scheduled_mailings.append({
+            "user_id": user_id,
+            "channel_id": channel_id,
+            "time": time_str,
+            "text": text,
+            "media_path": media_path,
+            "job_id": job_id
+        })
+
+        await message.answer(
+            f"✅ Рассылка для канала {channel_name} успешно создана!\n"
+            f"⏰ Время отправки: {hour:02d}:{minute:02d} (ежедневно)",
+            reply_markup=get_main_kb()
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка создания рассылки: {e}")
+        await message.answer(
+            f"❌ Произошла ошибка при создании рассылки: {str(e)}",
+            reply_markup=get_main_kb()
+        )
+    finally:
         db.current_state.pop(user_id, None)
         return
 
