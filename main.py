@@ -147,6 +147,7 @@ async def list_channels(message: types.Message):
     channels_list = "\n".join(
         f"{i+1}. {name}" if name else f"{i+1}. Канал (ID: {id})"
         for i, (id, name) in enumerate(db.user_channels[user_id].items())
+    )
     
     await message.answer(
         f"📋 Ваши каналы:\n{channels_list}",
