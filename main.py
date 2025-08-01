@@ -98,10 +98,11 @@ async def web_server():
 async def send_with_delay(channel_id: int, text: str, media_path: str):
     try:
         if media_path and os.path.exists(media_path):
-            await bot.send_photo(
-                chat_id=channel_id,
-                photo=InputFile(media_path)
-            )  # Закрывающая скобка для send_photo
+            with open(media_path, 'rb') as photo:
+                await bot.send_photo(
+                    chat_id=channel_id,
+                    photo=photo
+                )
             await asyncio.sleep(2)  # Задержка 2 секунды
         
         await bot.send_message(
