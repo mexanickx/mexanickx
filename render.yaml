@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: telegram-bot
+    runtime: python
+    pythonVersion: "3.10.13"  # Явно указываем версию
+    buildCommand: |
+      python -m pip install --upgrade pip
+      pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        value: 8348898919:AAHsfBrt5QGS5_qoX8_5QLLOfSYcLh6aYAU
