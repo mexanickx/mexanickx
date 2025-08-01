@@ -16,7 +16,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # Настройки
 API_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-PORT = int(os.getenv("PORT", 8080))  # Render автоматически назначает порт
+PORT = int(os.getenv("PORT", 8080))
 scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
 
 # Инициализация логгера
@@ -40,13 +40,15 @@ db = Database()
 
 # Клавиатуры
 def get_main_kb():
-    buttons = [
-        [KeyboardButton(text="➕ Добавить канал")],
-        [KeyboardButton(text="📋 Мои каналы")],
-        [KeyboardButton(text="🚀 Создать рассылку")],
-        [KeyboardButton(text="❌ Удалить канал")]
-    ]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="➕ Добавить канал")],
+            [KeyboardButton(text="📋 Мои каналы")],
+            [KeyboardButton(text="🚀 Создать рассылку")],
+            [KeyboardButton(text="❌ Удалить канал")]
+        ],
+        resize_keyboard=True
+    )
 
 def get_cancel_kb():
     return ReplyKeyboardMarkup(
@@ -55,11 +57,13 @@ def get_cancel_kb():
     )
 
 def get_confirm_kb():
-    buttons = [
-        [KeyboardButton(text="✅ Подтвердить")],
-        [KeyboardButton(text="Отмена")]
-    ]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="✅ Подтвердить")],
+            [KeyboardButton(text="Отмена")]
+        ],
+        resize_keyboard=True
+    )
 
 def get_channels_kb(user_id, prefix="select"):
     buttons = []
@@ -153,6 +157,7 @@ async def list_channels(message: types.Message):
     channels_list = "\n".join(
         f"{i+1}. {name}" if name else f"{i+1}. Канал (ID: {id})"
         for i, (id, name) in enumerate(db.user_channels[user_id].items())
+    )
     
     await message.answer(
         f"📋 Ваши каналы:\n{channels_list}",
@@ -239,7 +244,6 @@ async def process_mailing(message: types.Message):
             user_state["media_path"] = None
             await confirm_mailing(message)
         elif message.photo:
-            # Удаляем предыдущее изображение, если оно было
             if "media_path" in user_state and user_state["media_path"]:
                 try:
                     os.remove(user_state["media_path"])
