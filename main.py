@@ -1,7 +1,6 @@
 import logging
 import os
 import asyncio
-import threading
 from datetime import datetime
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types
@@ -17,6 +16,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # Настройки
 API_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+PORT = int(os.getenv("PORT", 8080))  # Render автоматически назначает порт
 scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
 
 # Инициализация логгера
@@ -73,14 +73,20 @@ def get_channels_kb(user_id, prefix="select"):
             ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# Фиктивный веб-сервер для Render
+# Веб-сервер для Render
 async def health_check(request):
     return web.Response(text="Bot is running")
 
-def run_web_server():
+async def web_server():
     app = web.Application()
     app.router.add_get('/', health_check)
-    web.run_app(app, port=int(os.getenv("PORT", 8080)))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', PORT)
+    await site.start()
+    logger.info(f"Веб-сервер запущен на порту {PORT}")
+    while True:
+        await asyncio.sleep(3600)
 
 # Обработчики команд
 @dp.message_handler(Command("start"))
@@ -147,7 +153,6 @@ async def list_channels(message: types.Message):
     channels_list = "\n".join(
         f"{i+1}. {name}" if name else f"{i+1}. Канал (ID: {id})"
         for i, (id, name) in enumerate(db.user_channels[user_id].items())
-    )
     
     await message.answer(
         f"📋 Ваши каналы:\n{channels_list}",
@@ -222,7 +227,7 @@ async def process_mailing(message: types.Message):
         user_state["text"] = message.text.strip()
         user_state["step"] = "awaiting_media"
         await message.answer(
-            "🖼️ Отправьте изображение для рассылки (или нажмите 'пропустить' для текстовой рассылки):",
+            "🖼️ Отправьте изображение для рассылки (или 'пропустить' для текстовой рассылки):",
             reply_markup=ReplyKeyboardMarkup(
                 keyboard=[[KeyboardButton(text="пропустить")]],
                 resize_keyboard=True
@@ -241,32 +246,6 @@ async def process_mailing(message: types.Message):
                 except:
                     pass
             
-            photo = message.photo[-1]
-            file_id = photo.file_id
-            file = await bot.get_file(file_id)
-            file_path = file.file_path
-
-            if not os.path.exists("media"):
-                os.makedirs("media")
-
-            local_path = f"media/{user_id}_{file_id}.jpg"
-            await bot.download_file(file_path, local_path)
-            user_state["media_path"] = local_path
-            await confirm_mailing(message)
-        else:
-            await message.answer(
-                "Пожалуйста, отправьте изображение или нажмите 'пропустить'.",
-                reply_markup=ReplyKeyboardMarkup(
-                    keyboard=[[KeyboardButton(text="пропустить")]],
-                    resize_keyboard=True
-                )
-            )
-
-    elif user_state.get("step") == "awaiting_media":
-        if message.text and message.text.lower() == "пропустить":
-            user_state["media_path"] = None
-            await confirm_mailing(message)
-        elif message.photo:
             photo = message.photo[-1]
             file_id = photo.file_id
             file = await bot.get_file(file_id)
@@ -326,12 +305,19 @@ async def confirm_mailing(message: types.Message):
         "Нажмите «✅ Подтвердить» для создания рассылки"
     )
 
-    if media_path:
-        await message.answer_photo(
-            photo=InputFile(media_path),
-            caption=confirm_text,
-            reply_markup=get_confirm_kb()
-        )
+    if media_path and os.path.exists(media_path):
+        try:
+            await message.answer_photo(
+                photo=InputFile(media_path),
+                caption=confirm_text,
+                reply_markup=get_confirm_kb()
+            )
+        except Exception as e:
+            logger.error(f"Ошибка отправки изображения: {e}")
+            await message.answer(
+                confirm_text,
+                reply_markup=get_confirm_kb()
+            )
     else:
         await message.answer(
             confirm_text,
@@ -401,7 +387,7 @@ async def finalize_mailing(message: types.Message):
 
 async def send_mailing(channel_id: int, text: str, media_path: str):
     try:
-        if media_path:
+        if media_path and os.path.exists(media_path):
             await bot.send_photo(
                 chat_id=channel_id,
                 photo=InputFile(media_path),
@@ -512,12 +498,11 @@ async def on_startup(_):
         scheduler.start()
         logger.info("Планировщик рассылок запущен")
 
+    # Запуск веб-сервера в фоновом режиме
+    asyncio.create_task(web_server())
+    
     logger.info("Бот запущен и готов к работе")
 
 if __name__ == '__main__':
-    # Запуск фиктивного веб-сервера для Render
-    threading.Thread(target=run_web_server, daemon=True).start()
-    
-    # Запуск бота
     from aiogram import executor
     executor.start_polling(dp, on_startup=on_startup, skip_updates=True)
