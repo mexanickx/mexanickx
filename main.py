@@ -1,7 +1,7 @@
 import logging
 import os
 import asyncio
-import time  # Добавлен импорт модуля time
+import time
 from datetime import datetime
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types
@@ -14,20 +14,22 @@ from aiogram.types import (
     InlineKeyboardButton
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from aiogram.utils.exceptions import TerminatedByOtherGetUpdates
 
 # Настройки
 API_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-PORT = int(os.getenv("PORT", 8080))
+PORT = int(os.getenv("PORT", 10000))
 scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
 
 # Инициализация логгера
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-bot = Bot(token=API_TOKEN)
+# Инициализация бота
+bot = Bot(token=API_TOKEN, parse_mode="HTML")
 dp = Dispatcher(bot)
 
 # База данных
@@ -202,6 +204,64 @@ async def select_channel(callback: types.CallbackQuery):
     )
     await callback.answer()
 
+@dp.message_handler(content_types=types.ContentType.PHOTO)
+async def handle_photo(message: types.Message):
+    user_id = message.from_user.id
+    user_state = db.current_state.get(user_id, {})
+    
+    if user_state.get("action") != "creating_mailing" or user_state.get("step") != "awaiting_media":
+        return
+    
+    try:
+        logger.info(f"Получено фото от пользователя {user_id}")
+        
+        # Удаляем предыдущее изображение, если было
+        if "media_path" in user_state and user_state["media_path"]:
+            try:
+                os.remove(user_state["media_path"])
+            except Exception as e:
+                logger.error(f"Ошибка удаления старого изображения: {e}")
+
+        # Получаем файл изображения
+        photo = message.photo[-1]
+        file_id = photo.file_id
+        file = await bot.get_file(file_id)
+        file_path = file.file_path
+        
+        logger.info(f"File info: {file}, Path: {file_path}")
+
+        # Создаем папку для медиа, если не существует
+        os.makedirs("media", exist_ok=True)
+        
+        # Сохраняем изображение
+        local_path = f"media/{user_id}_{file_id}.jpg"
+        await bot.download_file(file_path, local_path)
+        
+        # Проверяем, что файл сохранился
+        if not os.path.exists(local_path):
+            raise Exception("Файл не был сохранен")
+            
+        logger.info(f"Изображение сохранено по пути: {local_path}")
+        
+        # Обновляем состояние
+        user_state["media_path"] = local_path
+        
+        # Отправляем подтверждение пользователю
+        await message.answer("✅ Изображение успешно загружено!")
+        
+        # Переходим к подтверждению рассылки
+        await confirm_mailing(message)
+        
+    except Exception as e:
+        logger.error(f"Ошибка обработки изображения: {e}", exc_info=True)
+        await message.answer(
+            "❌ Не удалось обработать изображение. Попробуйте еще раз или нажмите 'пропустить'.",
+            reply_markup=ReplyKeyboardMarkup(
+                keyboard=[[KeyboardButton(text="пропустить")]],
+                resize_keyboard=True
+            )
+        )
+
 @dp.message_handler(lambda message: db.current_state.get(message.from_user.id, {}).get("action") == "creating_mailing")
 async def process_mailing(message: types.Message):
     user_id = message.from_user.id
@@ -233,7 +293,7 @@ async def process_mailing(message: types.Message):
         user_state["text"] = message.text.strip()
         user_state["step"] = "awaiting_media"
         await message.answer(
-            "🖼️ Отправьте изображение для рассылки (или нажмите 'пропустить' для текстовой рассылки):",
+            "🖼️ Отправьте изображение для рассылки (или 'пропустить' для текстовой рассылки):",
             reply_markup=ReplyKeyboardMarkup(
                 keyboard=[[KeyboardButton(text="пропустить")]],
                 resize_keyboard=True
@@ -243,47 +303,8 @@ async def process_mailing(message: types.Message):
     elif user_state.get("step") == "awaiting_media":
         if message.text and message.text.lower() == "пропустить":
             user_state["media_path"] = None
+            await message.answer("✅ Рассылка будет без изображения")
             await confirm_mailing(message)
-            await message.answer("✅ Рассылка будет без изображения", reply_markup=get_confirm_kb())
-        elif message.photo:
-            # Удаляем предыдущее изображение, если оно было
-            if "media_path" in user_state and user_state["media_path"]:
-                try:
-                    os.remove(user_state["media_path"])
-                except:
-                    pass
-            
-            photo = message.photo[-1]
-            file_id = photo.file_id
-            file = await bot.get_file(file_id)
-            file_path = file.file_path
-
-            if not os.path.exists("media"):
-                os.makedirs("media")
-
-            local_path = f"media/{user_id}_{file_id}.jpg"
-            try:
-                await bot.download_file(file_path, local_path)
-                user_state["media_path"] = local_path
-                await message.answer("✅ Изображение успешно загружено!", reply_markup=get_confirm_kb())
-                await confirm_mailing(message)
-            except Exception as e:
-                logger.error(f"Ошибка загрузки изображения: {e}")
-                await message.answer(
-                    "❌ Не удалось загрузить изображение. Попробуйте еще раз или нажмите 'пропустить'.",
-                    reply_markup=ReplyKeyboardMarkup(
-                        keyboard=[[KeyboardButton(text="пропустить")]],
-                        resize_keyboard=True
-                    )
-                )
-        else:
-            await message.answer(
-                "Пожалуйста, отправьте изображение или нажмите 'пропустить'.",
-                reply_markup=ReplyKeyboardMarkup(
-                    keyboard=[[KeyboardButton(text="пропустить")]],
-                    resize_keyboard=True
-                )
-            )
 
 async def confirm_mailing(message: types.Message):
     user_id = message.from_user.id
@@ -302,107 +323,6 @@ async def confirm_mailing(message: types.Message):
             "❌ Ошибка: недостаточно данных для создания рассылки",
             reply_markup=get_main_kb()
         )
-        db.current_state.pop(user_id, None)
-        return
-
-    # Сохраняем данные для подтверждения
-    db.current_state[user_id] = {
-        "action": "confirming_mailing",
-        "mailing_data": {
-            "channel_id": channel_id,
-            "time": time_str,
-            "text": text,
-            "media_path": media_path
-        }
-    }
-
-    channel_name = db.user_channels[user_id][channel_id]
-    confirm_text = (
-        f"📋 Подтвердите рассылку для канала {channel_name}:\n\n"
-        f"⏰ Время: {time_str}\n"
-        f"📝 Текст: {text}\n\n"
-        "Нажмите «✅ Подтвердить» для создания рассылки"
-    )
-
-    if media_path and os.path.exists(media_path):
-        try:
-            with open(media_path, 'rb') as photo_file:
-                await message.answer_photo(
-                    photo=photo_file,
-                    caption=confirm_text,
-                    reply_markup=get_confirm_kb()
-                )
-        except Exception as e:
-            logger.error(f"Ошибка отправки изображения: {e}")
-            await message.answer(
-                confirm_text,
-                reply_markup=get_confirm_kb()
-            )
-    else:
-        await message.answer(
-            confirm_text,
-            reply_markup=get_confirm_kb()
-        )
-
-@dp.message_handler(lambda message: message.text == "✅ Подтвердить")
-async def finalize_mailing(message: types.Message):
-    user_id = message.from_user.id
-    user_state = db.current_state.get(user_id, {})
-
-    if user_state.get("action") != "confirming_mailing":
-        return
-
-    mailing_data = user_state.get("mailing_data", {})
-    channel_id = mailing_data.get("channel_id")
-    time_str = mailing_data.get("time")
-    text = mailing_data.get("text")
-    media_path = mailing_data.get("media_path")
-
-    if None in [channel_id, time_str, text]:
-        await message.answer(
-            "❌ Ошибка: недостаточно данных для создания рассылки",
-            reply_markup=get_main_kb()
-        )
-        db.current_state.pop(user_id, None)
-        return
-
-    try:
-        hour, minute = map(int, time_str.split(":"))
-        channel_name = db.user_channels[user_id][channel_id]
-
-        job_id = f"mailing_{user_id}_{channel_id}_{int(time.time())}"
-
-        scheduler.add_job(
-            send_mailing,
-            'cron',
-            hour=hour,
-            minute=minute,
-            args=[channel_id, text, media_path],
-            id=job_id
-        )
-
-        db.scheduled_mailings.append({
-            "user_id": user_id,
-            "channel_id": channel_id,
-            "time": time_str,
-            "text": text,
-            "media_path": media_path,
-            "job_id": job_id
-        })
-
-        await message.answer(
-            f"✅ Рассылка для канала {channel_name} успешно создана!\n"
-            f"⏰ Время отправки: {hour:02d}:{minute:02d} (ежедневно)",
-            reply_markup=get_main_kb()
-        )
-
-    except Exception as e:
-        logger.error(f"Ошибка создания рассылки: {e}")
-        await message.answer(
-            f"❌ Произошла ошибка при создании рассылки: {str(e)}",
-            reply_markup=get_main_kb()
-        )
-    finally:
         db.current_state.pop(user_id, None)
         return
 
@@ -609,6 +529,11 @@ async def cancel_action(message: types.Message):
         reply_markup=get_main_kb()
     )
 
+@dp.errors_handler(exception=TerminatedByOtherGetUpdates)
+async def handle_terminated_error(update: types.Update, exception: TerminatedByOtherGetUpdates):
+    logger.error(f"Обнаружен конфликт getUpdates: {exception}")
+    return True
+
 async def on_startup(_):
     if not os.path.exists("media"):
         os.makedirs("media")
@@ -617,6 +542,9 @@ async def on_startup(_):
         scheduler.start()
         logger.info("Планировщик рассылок запущен")
 
+    # Закрытие предыдущих сессий
+    await bot.delete_webhook(drop_pending_updates=True)
+    
     # Запуск веб-сервера в фоновом режиме
     asyncio.create_task(web_server())
     
@@ -624,4 +552,12 @@ async def on_startup(_):
 
 if __name__ == '__main__':
     from aiogram import executor
-    executor.start_polling(dp, on_startup=on_startup, skip_updates=True)
+    
+    executor.start_polling(
+        dp, 
+        on_startup=on_startup, 
+        skip_updates=True,
+        timeout=60,
+        relax=5,
+        reset_webhook=True
+    )
