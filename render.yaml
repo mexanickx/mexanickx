@@ -3,10 +3,12 @@ services:
     name: telegram-bot
     runtime: python
     pythonVersion: "3.10.12"
+    envVars:
+      - key: PORT
+        value: 8080
+      - key: TELEGRAM_BOT_TOKEN
+        value: 8348898919:AAHsfBrt5QGS5_qoX8_5QLLOfSYcLh6aYAU
     buildCommand: |
       python -m pip install --upgrade pip
       pip install -r requirements.txt
     startCommand: python main.py
-    envVars:
-      - key: TELEGRAM_BOT_TOKEN
-        value: 8348898919:AAHsfBrt5QGS5_qoX8_5QLLOfSYcLh6aYAU
