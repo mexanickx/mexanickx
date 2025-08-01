@@ -1,13 +1,17 @@
 import logging
 import os
 import asyncio
-import time
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types
 from aiogram.dispatcher.filters import Command
-from aiogram.types import (ReplyKeyboardMarkup, KeyboardButton,
-                          InlineKeyboardMarkup, InlineKeyboardButton,
-                          InputFile)
+from aiogram.types import (
+    ReplyKeyboardMarkup, 
+    KeyboardButton, 
+    InputFile, 
+    InlineKeyboardMarkup, 
+    InlineKeyboardButton,
+    InputMediaPhoto
+)
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # Настройки
@@ -44,8 +48,10 @@ def get_main_kb():
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 def get_cancel_kb():
-    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Отмена")]], 
-                             resize_keyboard=True)
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="Отмена")]], 
+        resize_keyboard=True
+    )
 
 def get_confirm_kb():
     buttons = [
@@ -131,7 +137,6 @@ async def list_channels(message: types.Message):
     channels_list = "\n".join(
         f"{i+1}. {name}" if name else f"{i+1}. Канал (ID: {id})"
         for i, (id, name) in enumerate(db.user_channels[user_id].items())
-    )
     
     await message.answer(
         f"📋 Ваши каналы:\n{channels_list}",
@@ -204,7 +209,7 @@ async def process_mailing(message: types.Message):
             return
 
         user_state["text"] = message.text.strip()
-        user_state["step"] = "awaiting_photo"
+        user_state["step"] = "awaiting_media"
         await message.answer(
             "🖼️ Отправьте изображение для рассылки (или 'пропустить' для текстовой рассылки):",
             reply_markup=ReplyKeyboardMarkup(
@@ -213,9 +218,9 @@ async def process_mailing(message: types.Message):
             )
         )
 
-    elif user_state.get("step") == "awaiting_photo":
+    elif user_state.get("step") == "awaiting_media":
         if message.text and message.text.lower() == "пропустить":
-            user_state["photo_path"] = None
+            user_state["media_path"] = None
             await confirm_mailing(message)
         elif message.photo:
             photo = message.photo[-1]
@@ -228,7 +233,7 @@ async def process_mailing(message: types.Message):
 
             local_path = f"media/{user_id}_{file_id}.jpg"
             await bot.download_file(file_path, local_path)
-            user_state["photo_path"] = local_path
+            user_state["media_path"] = local_path
             await confirm_mailing(message)
         else:
             await message.answer(
@@ -249,7 +254,7 @@ async def confirm_mailing(message: types.Message):
     channel_id = user_state.get("channel_id")
     time_str = user_state.get("time")
     text = user_state.get("text")
-    photo_path = user_state.get("photo_path")
+    media_path = user_state.get("media_path")
 
     if None in [channel_id, time_str, text]:
         await message.answer(
@@ -265,7 +270,7 @@ async def confirm_mailing(message: types.Message):
             "channel_id": channel_id,
             "time": time_str,
             "text": text,
-            "photo_path": photo_path
+            "media_path": media_path
         }
     }
 
@@ -277,10 +282,10 @@ async def confirm_mailing(message: types.Message):
         "Нажмите «✅ Подтвердить» для создания рассылки"
     )
 
-    if photo_path:
-        with open(photo_path, 'rb') as photo_file:
+    if media_path:
+        with open(media_path, 'rb') as media_file:
             await message.answer_photo(
-                photo=BufferedInputFile(photo_file.read(), filename="preview.jpg"),
+                photo=InputFile(media_path),
                 caption=confirm_text,
                 reply_markup=get_confirm_kb()
             )
@@ -302,7 +307,7 @@ async def finalize_mailing(message: types.Message):
     channel_id = mailing_data.get("channel_id")
     time_str = mailing_data.get("time")
     text = mailing_data.get("text")
-    photo_path = mailing_data.get("photo_path")
+    media_path = mailing_data.get("media_path")
 
     if None in [channel_id, time_str, text]:
         await message.answer(
@@ -323,7 +328,7 @@ async def finalize_mailing(message: types.Message):
             'cron',
             hour=hour,
             minute=minute,
-            args=[channel_id, text, photo_path],
+            args=[channel_id, text, media_path],
             id=job_id
         )
 
@@ -332,7 +337,7 @@ async def finalize_mailing(message: types.Message):
             "channel_id": channel_id,
             "time": time_str,
             "text": text,
-            "photo_path": photo_path,
+            "media_path": media_path,
             "job_id": job_id
         })
 
@@ -351,17 +356,20 @@ async def finalize_mailing(message: types.Message):
     finally:
         db.current_state.pop(user_id, None)
 
-async def send_mailing(channel_id: int, text: str, photo_path: str):
+async def send_mailing(channel_id: int, text: str, media_path: str):
     try:
-        if photo_path:
-            with open(photo_path, 'rb') as photo_file:
+        if media_path:
+            with open(media_path, 'rb') as media_file:
                 await bot.send_photo(
                     chat_id=channel_id,
-                    photo=BufferedInputFile(photo_file.read(), filename="mailing.jpg")
+                    photo=InputFile(media_path),
+                    caption=text
                 )
-            await asyncio.sleep(3)
-
-        await bot.send_message(chat_id=channel_id, text=text)
+        else:
+            await bot.send_message(
+                chat_id=channel_id,
+                text=text
+            )
     except Exception as e:
         logger.error(f"Ошибка отправки в канал {channel_id}: {e}")
 
@@ -437,14 +445,14 @@ async def cancel_action(message: types.Message):
     user_state = db.current_state.get(user_id, {})
 
     if user_state:
-        if "photo_path" in user_state:
+        if "media_path" in user_state and user_state["media_path"]:
             try:
-                os.remove(user_state["photo_path"])
+                os.remove(user_state["media_path"])
             except:
                 pass
-        elif "mailing_data" in user_state and "photo_path" in user_state["mailing_data"]:
+        elif "mailing_data" in user_state and "media_path" in user_state["mailing_data"]:
             try:
-                os.remove(user_state["mailing_data"]["photo_path"])
+                os.remove(user_state["mailing_data"]["media_path"])
             except:
                 pass
 
