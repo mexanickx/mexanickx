@@ -95,37 +95,24 @@ async def run_web_server():
 
 # ========== ОСНОВНЫЕ ФУНКЦИИ ==========
 async def send_to_channel(channel_id: int, text: str, media_path: str = None):
-    """
-    Отправляет сообщение в канал с возможным медиафайлом
-    Сначала отправляет изображение (если есть), затем через 2 секунды текст
-    """
     try:
-        # Отправка изображения (если указано)
+        # Отправка изображения (если есть)
         if media_path and os.path.exists(media_path):
-            try:
-                with open(media_path, 'rb') as photo_file:
-                    await bot.send_photo(
-                        chat_id=channel_id,
-                        photo=types.InputFile(photo_file)
-                
-                logger.info(f"Изображение отправлено в канал {channel_id}")
-                await asyncio.sleep(2)  # Ждем 2 секунды перед текстом
-            except Exception as photo_error:
-                logger.error(f"Ошибка отправки фото: {photo_error}")
-                # Продолжаем пытаться отправить текст даже если фото не отправилось
+            with open(media_path, 'rb') as photo:
+                await bot.send_photo(
+                    chat_id=channel_id,
+                    photo=photo
+                )  # Закрывающая скобка для send_photo
+            await asyncio.sleep(2)  # Задержка 2 секунды
         
-        # Отправка текстового сообщения
+        # Отправка текста
         if text and text.strip():
             await bot.send_message(
                 chat_id=channel_id,
                 text=text
             )
-            logger.info(f"Текст отправлен в канал {channel_id}")
-            
     except Exception as e:
-        logger.error(f"Критическая ошибка при отправке в канал {channel_id}: {e}")
-        raise
-
+        logger.error(f"Ошибка отправки в канал {channel_id}: {e}")
 # ========== ОБРАБОТЧИКИ КОМАНД ==========
 @dp.message_handler(Command("start"), run_task=True)
 async def command_start(message: types.Message):
