@@ -101,11 +101,13 @@ async def send_with_delay(channel_id: int, text: str, media_path: str):
             await bot.send_photo(
                 chat_id=channel_id,
                 photo=InputFile(media_path)
+            )  # Закрывающая скобка для send_photo
             await asyncio.sleep(2)  # Задержка 2 секунды
         
         await bot.send_message(
             chat_id=channel_id,
-            text=text))
+            text=text
+        )
     except Exception as e:
         logger.error(f"Ошибка отправки в канал {channel_id}: {e}")
 
