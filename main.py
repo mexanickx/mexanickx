@@ -23,7 +23,7 @@ scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
 
 # Инициализация логгера
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -94,6 +94,21 @@ async def web_server():
     logger.info(f"Веб-сервер запущен на порту {PORT}")
     while True:
         await asyncio.sleep(3600)
+
+async def send_with_delay(channel_id: int, text: str, media_path: str):
+    try:
+        if media_path and os.path.exists(media_path):
+            await bot.send_photo(
+                chat_id=channel_id,
+                photo=InputFile(media_path)
+            await asyncio.sleep(2)  # Задержка 2 секунды
+        
+        await bot.send_message(
+            chat_id=channel_id,
+            text=text
+        )
+    except Exception as e:
+        logger.error(f"Ошибка отправки в канал {channel_id}: {e}")
 
 # Обработчики команд
 @dp.message_handler(Command("start"))
@@ -213,53 +228,38 @@ async def handle_photo(message: types.Message):
         return
     
     try:
-        logger.info(f"Получено фото от пользователя {user_id}")
-        
         # Удаляем предыдущее изображение, если было
         if "media_path" in user_state and user_state["media_path"]:
             try:
                 os.remove(user_state["media_path"])
-            except Exception as e:
-                logger.error(f"Ошибка удаления старого изображения: {e}")
+            except:
+                pass
 
         # Получаем файл изображения
         photo = message.photo[-1]
         file_id = photo.file_id
         file = await bot.get_file(file_id)
         file_path = file.file_path
-        
-        logger.info(f"File info: {file}, Path: {file_path}")
 
-        # Создаем папку для медиа, если не существует
+        # Создаем папку для медиа
         os.makedirs("media", exist_ok=True)
         
         # Сохраняем изображение
         local_path = f"media/{user_id}_{file_id}.jpg"
         await bot.download_file(file_path, local_path)
         
-        # Проверяем, что файл сохранился
-        if not os.path.exists(local_path):
-            raise Exception("Файл не был сохранен")
-            
-        logger.info(f"Изображение сохранено по пути: {local_path}")
-        
         # Обновляем состояние
         user_state["media_path"] = local_path
         
-        # Отправляем подтверждение пользователю
-        await message.answer("✅ Изображение успешно загружено!")
-        
-        # Переходим к подтверждению рассылки
+        # Подтверждаем получение
+        await message.answer("✅ Изображение получено!")
         await confirm_mailing(message)
         
     except Exception as e:
-        logger.error(f"Ошибка обработки изображения: {e}", exc_info=True)
+        logger.error(f"Ошибка обработки изображения: {e}")
         await message.answer(
-            "❌ Не удалось обработать изображение. Попробуйте еще раз или нажмите 'пропустить'.",
-            reply_markup=ReplyKeyboardMarkup(
-                keyboard=[[KeyboardButton(text="пропустить")]],
-                resize_keyboard=True
-            )
+            "❌ Не удалось сохранить изображение. Попробуйте еще раз.",
+            reply_markup=get_cancel_kb()
         )
 
 @dp.message_handler(lambda message: db.current_state.get(message.from_user.id, {}).get("action") == "creating_mailing")
@@ -303,7 +303,6 @@ async def process_mailing(message: types.Message):
     elif user_state.get("step") == "awaiting_media":
         if message.text and message.text.lower() == "пропустить":
             user_state["media_path"] = None
-            await message.answer("✅ Рассылка будет без изображения")
             await confirm_mailing(message)
 
 async def confirm_mailing(message: types.Message):
@@ -392,7 +391,7 @@ async def finalize_mailing(message: types.Message):
         job_id = f"mailing_{user_id}_{channel_id}_{int(time.time())}"
 
         scheduler.add_job(
-            send_mailing,
+            send_with_delay,
             'cron',
             hour=hour,
             minute=minute,
@@ -423,22 +422,6 @@ async def finalize_mailing(message: types.Message):
         )
     finally:
         db.current_state.pop(user_id, None)
-
-async def send_mailing(channel_id: int, text: str, media_path: str):
-    try:
-        if media_path and os.path.exists(media_path):
-            await bot.send_photo(
-                chat_id=channel_id,
-                photo=InputFile(media_path),
-                caption=text
-            )
-        else:
-            await bot.send_message(
-                chat_id=channel_id,
-                text=text
-            )
-    except Exception as e:
-        logger.error(f"Ошибка отправки в канал {channel_id}: {e}")
 
 @dp.message_handler(lambda message: message.text == "❌ Удалить канал")
 async def delete_channel_start(message: types.Message):
@@ -530,8 +513,10 @@ async def cancel_action(message: types.Message):
     )
 
 @dp.errors_handler(exception=TerminatedByOtherGetUpdates)
-async def handle_terminated_error(update: types.Update, exception: TerminatedByOtherGetUpdates):
-    logger.error(f"Обнаружен конфликт getUpdates: {exception}")
+async def handle_conflict_error(update: types.Update, exception: TerminatedByOtherGetUpdates):
+    logger.warning("Обнаружен конфликт getUpdates. Перезапускаем бота...")
+    await asyncio.sleep(5)
+    await dp.start_polling()
     return True
 
 async def on_startup(_):
@@ -542,10 +527,8 @@ async def on_startup(_):
         scheduler.start()
         logger.info("Планировщик рассылок запущен")
 
-    # Закрытие предыдущих сессий
     await bot.delete_webhook(drop_pending_updates=True)
     
-    # Запуск веб-сервера в фоновом режиме
     asyncio.create_task(web_server())
     
     logger.info("Бот запущен и готов к работе")
@@ -554,8 +537,8 @@ if __name__ == '__main__':
     from aiogram import executor
     
     executor.start_polling(
-        dp, 
-        on_startup=on_startup, 
+        dp,
+        on_startup=on_startup,
         skip_updates=True,
         timeout=60,
         relax=5,
