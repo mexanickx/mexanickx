@@ -1,4 +1,4 @@
 aiogram==2.25.1
-aiohttp==3.8.5  # Последняя стабильная версия для Python 3.10
-apscheduler==3.9.1
-python-dotenv==0.21.1
+aiohttp==3.8.6
+apscheduler==3.10.1
+python-dotenv==1.0.0
