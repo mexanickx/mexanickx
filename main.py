@@ -222,12 +222,45 @@ async def process_mailing(message: types.Message):
         user_state["text"] = message.text.strip()
         user_state["step"] = "awaiting_media"
         await message.answer(
-            "🖼️ Отправьте изображение для рассылки (или 'пропустить' для текстовой рассылки):",
+            "🖼️ Отправьте изображение для рассылки (или нажмите 'пропустить' для текстовой рассылки):",
             reply_markup=ReplyKeyboardMarkup(
                 keyboard=[[KeyboardButton(text="пропустить")]],
                 resize_keyboard=True
             )
         )
+
+    elif user_state.get("step") == "awaiting_media":
+        if message.text and message.text.lower() == "пропустить":
+            user_state["media_path"] = None
+            await confirm_mailing(message)
+        elif message.photo:
+            # Удаляем предыдущее изображение, если оно было
+            if "media_path" in user_state and user_state["media_path"]:
+                try:
+                    os.remove(user_state["media_path"])
+                except:
+                    pass
+            
+            photo = message.photo[-1]
+            file_id = photo.file_id
+            file = await bot.get_file(file_id)
+            file_path = file.file_path
+
+            if not os.path.exists("media"):
+                os.makedirs("media")
+
+            local_path = f"media/{user_id}_{file_id}.jpg"
+            await bot.download_file(file_path, local_path)
+            user_state["media_path"] = local_path
+            await confirm_mailing(message)
+        else:
+            await message.answer(
+                "Пожалуйста, отправьте изображение или нажмите 'пропустить'.",
+                reply_markup=ReplyKeyboardMarkup(
+                    keyboard=[[KeyboardButton(text="пропустить")]],
+                    resize_keyboard=True
+                )
+            )
 
     elif user_state.get("step") == "awaiting_media":
         if message.text and message.text.lower() == "пропустить":
