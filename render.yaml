@@ -7,7 +7,7 @@ services:
       - key: PORT
         value: 8080
       - key: TELEGRAM_BOT_TOKEN
-        value: 8348898919:AAHsfBrt5QGS5_qoX8_5QLLOfSYcLh6aYAU
+        value: 8348898919:AAHDPdhD54pf0teomAfOt_gg5lqu4_At3EM
     buildCommand: |
       python -m pip install --upgrade pip
       pip install -r requirements.txt
